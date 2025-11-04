@@ -14,7 +14,7 @@ export default defineConfig({
   description: "Global Match & Replace rule template for Caido",
   version: "1.0.0",
   author: {
-    name: "Xvffdos",
+    name: "xvffdos",
     email: "dev@xvffdos.com",
     url: "https://github.com/MDGDSS/caido-template",
   },
