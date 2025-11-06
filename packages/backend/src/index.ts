@@ -23,24 +23,16 @@ export type Rule = {
   workflowId?: string; // Workflow ID (if workflow replacer)
 };
 
+export type Collection = {
+  id: string;
+  name: string;
+  rules: Rule[];
+};
+
 export type Result<T> =
   | { kind: "Error"; error: string }
   | { kind: "Ok"; value: T };
 
-const getAllProjects = async (sdk: SDK): Promise<Result<Project[]>> => {
-  try {
-    const projects = await sdk.projects.getAll();
-    const mapped = projects.map((p) => ({
-      id: p.getId(),
-      name: p.getName(),
-    }));
-    return { kind: "Ok", value: mapped };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    sdk.console.error(`Failed to get all projects: ${message}`);
-    return { kind: "Error", error: `Failed to get all projects: ${message}` };
-  }
-};
 
 const getCurrentProject = async (sdk: SDK): Promise<Result<Project | undefined>> => {
   try {
@@ -62,34 +54,6 @@ const getCurrentProject = async (sdk: SDK): Promise<Result<Project | undefined>>
   }
 };
 
-const getAllWorkflows = async (sdk: SDK): Promise<Result<Workflow[]>> => {
-  try {
-    if ("workflows" in sdk && typeof sdk.workflows === "object" && sdk.workflows !== null) {
-      const workflowsObj = sdk.workflows as Record<string, unknown>;
-      
-      // getWorkflows() is synchronous and returns Workflow[] with id and name properties
-      if ("getWorkflows" in workflowsObj && typeof workflowsObj.getWorkflows === "function") {
-        const workflows = workflowsObj.getWorkflows() as Array<{ id: string; name: string }>;
-        if (Array.isArray(workflows)) {
-          const mapped = workflows.map((w) => ({
-            id: w.id,
-            name: w.name,
-          }));
-          sdk.console.log(`Retrieved ${mapped.length} workflows from backend SDK`);
-          return { kind: "Ok", value: mapped };
-        }
-      }
-    }
-    
-    // If workflows API is not available, return empty array
-    sdk.console.warn("Workflows API not available in backend SDK");
-    return { kind: "Ok", value: [] };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    sdk.console.error(`Failed to get all workflows: ${message}`);
-    return { kind: "Error", error: `Failed to get all workflows: ${message}` };
-  }
-};
 
 const syncTemplateToProject = async (
   sdk: SDK,
@@ -99,16 +63,103 @@ const syncTemplateToProject = async (
   return { kind: "Ok", value: rules.length };
 };
 
+const getCollections = async (sdk: SDK): Promise<Result<Collection[]>> => {
+  try {
+    const db = await sdk.meta.db();
+    const stmt = await db.prepare(`SELECT value FROM config WHERE key = ?`);
+    const result = await stmt.get<{ value: string }>("global-match-replace-collections");
+    
+    if (result === undefined || result.value === undefined) {
+      return { kind: "Ok", value: [] };
+    }
+    
+    const collections = JSON.parse(result.value) as Collection[];
+    return { kind: "Ok", value: collections };
+  } catch (error) {
+    return {
+      kind: "Error",
+      error: `Failed to read collections: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+};
+
+const getSelectedCollectionId = async (sdk: SDK): Promise<Result<string | undefined>> => {
+  try {
+    const db = await sdk.meta.db();
+    const stmt = await db.prepare(`SELECT value FROM config WHERE key = ?`);
+    const result = await stmt.get<{ value: string }>("global-match-replace-selected-collection");
+    
+    if (result === undefined || result.value === undefined) {
+      return { kind: "Ok", value: undefined };
+    }
+    
+    return { kind: "Ok", value: result.value };
+  } catch (error) {
+    return {
+      kind: "Error",
+      error: `Failed to read selected collection: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+};
+
+const saveCollections = async (sdk: SDK, collections: Collection[]): Promise<Result<void>> => {
+  try {
+    const db = await sdk.meta.db();
+    const value = JSON.stringify(collections);
+    const stmt = await db.prepare(`
+      INSERT OR REPLACE INTO config (key, value) 
+      VALUES (?, ?)
+    `);
+    await stmt.run("global-match-replace-collections", value);
+    return { kind: "Ok", value: undefined };
+  } catch (error) {
+    return {
+      kind: "Error",
+      error: `Failed to save collections: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+};
+
+const saveSelectedCollectionId = async (sdk: SDK, collectionId: string): Promise<Result<void>> => {
+  try {
+    const db = await sdk.meta.db();
+    const stmt = await db.prepare(`
+      INSERT OR REPLACE INTO config (key, value) 
+      VALUES (?, ?)
+    `);
+    await stmt.run("global-match-replace-selected-collection", collectionId);
+    return { kind: "Ok", value: undefined };
+  } catch (error) {
+    return {
+      kind: "Error",
+      error: `Failed to save selected collection: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+};
+
 export type API = DefineAPI<{
-  getAllProjects: typeof getAllProjects;
   getCurrentProject: typeof getCurrentProject;
-  getAllWorkflows: typeof getAllWorkflows;
   syncTemplateToProject: typeof syncTemplateToProject;
+  getCollections: typeof getCollections;
+  getSelectedCollectionId: typeof getSelectedCollectionId;
+  saveCollections: typeof saveCollections;
+  saveSelectedCollectionId: typeof saveSelectedCollectionId;
 }>;
 
-export function init(sdk: SDK<API>) {
-  sdk.api.register("getAllProjects", getAllProjects);
+export async function init(sdk: SDK<API>) {
+  // Create database table once at plugin startup
+  const db = await sdk.meta.db();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+  
   sdk.api.register("getCurrentProject", getCurrentProject);
-  sdk.api.register("getAllWorkflows", getAllWorkflows);
   sdk.api.register("syncTemplateToProject", syncTemplateToProject);
+  sdk.api.register("getCollections", getCollections);
+  sdk.api.register("getSelectedCollectionId", getSelectedCollectionId);
+  sdk.api.register("saveCollections", saveCollections);
+  sdk.api.register("saveSelectedCollectionId", saveSelectedCollectionId);
 }
