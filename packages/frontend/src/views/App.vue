@@ -11,7 +11,7 @@ import TabView from "primevue/tabview";
 import TabPanel from "primevue/tabpanel";
 
 // Vue
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useSDK } from "@/plugins/sdk";
 
 // ============================================================================
@@ -143,14 +143,14 @@ const load = async () => {
     const collectionsResult = await sdk.backend.getCollections();
     if (collectionsResult.kind === "Ok" && collectionsResult.value.length > 0) {
       collections.value = collectionsResult.value;
+      // Ensure selectedCollectionId is set immediately
+      if (!selectedCollectionId.value && collections.value.length > 0) {
+        selectedCollectionId.value = collections.value[0].id;
+      }
     } else {
       const defaultCollection = createDefaultCollection();
       collections.value = [defaultCollection];
-    }
-
-    // Always ensure selectedCollectionId is set after loading collections
-    if (collections.value.length > 0 && !selectedCollectionId.value) {
-      selectedCollectionId.value = collections.value[0].id;
+      selectedCollectionId.value = defaultCollection.id;
     }
 
     const selectedResult = await sdk.backend.getSelectedCollectionId();
@@ -162,13 +162,10 @@ const load = async () => {
       const found = collections.value.find((c) => c.id === selectedResult.value);
       if (found) {
         selectedCollectionId.value = found.id;
-      } else if (collections.value.length > 0) {
+      } else if (collections.value.length > 0 && !selectedCollectionId.value) {
         selectedCollectionId.value = collections.value[0].id;
       }
-    }
-    
-    // Final fallback: ensure selectedCollectionId is always set
-    if (collections.value.length > 0 && !selectedCollectionId.value) {
+    } else if (collections.value.length > 0 && !selectedCollectionId.value) {
       selectedCollectionId.value = collections.value[0].id;
     }
   } catch {
@@ -322,8 +319,7 @@ const saveRuleName = async (ruleId: string) => {
 // Import Functions
 // ============================================================================
 
-//AT this point dont touch anymore this one, it work like this
-//neccesary else rule wont import or sync
+//AT this point dont touch anymore this one it work like this
 const parseGraphQLRule = (item: Record<string, unknown>): Rule | undefined => {
   try {
     const name = typeof item.name === "string" ? item.name : "";
@@ -1186,6 +1182,25 @@ const onSyncToSelected = async () => {
             // Debug: log the section structure before sending
             console.log(`Creating rule "${r.name}":`, JSON.stringify(section, null, 2));
             
+            // Log replacer value for debugging empty values
+            if (section.operation && typeof section.operation === "object") {
+              let replacerValue = "";
+              if ("raw" in section.operation && section.operation.raw && typeof section.operation.raw === "object") {
+                const raw = section.operation.raw as Record<string, unknown>;
+                if (raw.replacer && typeof raw.replacer === "object" && "term" in raw.replacer) {
+                  replacerValue = typeof raw.replacer.term === "string" ? raw.replacer.term : "";
+                }
+              } else if ("replacer" in section.operation && section.operation.replacer && typeof section.operation.replacer === "object") {
+                const replacer = section.operation.replacer as Record<string, unknown>;
+                if ("term" in replacer) {
+                  replacerValue = typeof replacer.term === "string" ? replacer.term : "";
+                }
+              }
+              if (replacerValue === "") {
+                console.log(`Rule "${r.name}" has empty replacer value - this should be allowed`);
+              }
+            }
+            
       const rule = await sdk.matchReplace.createRule({
         collectionId: created.id,
               name: r.name !== undefined && r.name.length > 0 ? r.name : r.section,
@@ -1195,10 +1210,21 @@ const onSyncToSelected = async () => {
       await sdk.matchReplace.toggleRule(rule.id, r.active);
             ruleCount += 1;
           } catch (error) {
-            // Log error for debugging
+            // Log error for debugging with more context
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : "";
-            console.error(`Failed to sync rule "${r.name || r.id}":`, errorMessage, errorStack);
+            console.error(`Failed to sync rule "${r.name || r.id}":`, errorMessage);
+            console.error(`Rule details:`, {
+              name: r.name,
+              section: r.section,
+              matcher: r.matcher,
+              value: r.value,
+              replacerType: r.replacerType,
+              workflowId: r.workflowId,
+            });
+            console.error(`Error stack:`, errorStack);
+            // Show user-friendly error message
+            sdk.window.showToast(`Failed to sync rule "${r.name || r.id}": ${errorMessage}`, { variant: "error" });
             // Skip rule on error
           }
         }
@@ -1256,9 +1282,25 @@ const refreshCurrentProject = async (showToast = true) => {
 // ============================================================================
 
 
-onMounted(async () => {
-  await load();
-  await refreshCurrentProject(false); // Refresh project silently on mount to fix the uplaod deactivate issue
+let projectChangeHandler: { stop: () => void } | undefined;
+
+onMounted(() => {
+  void load();
+  void refreshCurrentProject(false); // Refresh project silently on mount
+
+  // Listen for project changes and silently refresh
+  if (sdk) {
+    projectChangeHandler = sdk.projects.onCurrentProjectChange(() => {
+      void refreshCurrentProject(false);
+    });
+  }
+});
+
+onUnmounted(() => {
+  // Clean up project change listener
+  if (projectChangeHandler) {
+    projectChangeHandler.stop();
+  }
 });
 </script>
 
@@ -1280,7 +1322,12 @@ onMounted(async () => {
       />
     </div>
 
-    <Card style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
+    <Card
+      style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;"
+      :pt="{
+        body: { style: 'padding: 0; gap: 0;' }
+      }"
+    >
       <template #content>
         <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
           <TabView

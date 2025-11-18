@@ -12,7 +12,7 @@ export default defineConfig({
   id,
   name: "Template",
   description: "Global Match & Replace rule template for Caido",
-  version: "1.0.2",
+  version: "1.0.3",
   author: {
     name: "xvffdos",
     email: "dev@xvffdos.com",

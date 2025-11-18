@@ -38,3 +38,12 @@
 html {
   scroll-behavior: smooth;
 }
+
+.p-6 {
+  padding: 0 !important;
+}
+
+[data-pc-section="body"] {
+  padding: 0 !important;
+  gap: 0 !important;
+}
